@@ -37,10 +37,15 @@ app = FastAPI(title="cc-browser", version="0.1.0")
 
 @app.on_event("startup")
 async def _startup():
-    s = os.environ.get("STORAGE_STATE_JSON", "").strip()
-    if s:
+    import base64
+    b64 = os.environ.get("STORAGE_STATE_JSON_B64", "").strip()
+    raw = os.environ.get("STORAGE_STATE_JSON", "").strip()
+    if b64:
+        with open(STATE_PATH, "wb") as f:
+            f.write(base64.b64decode(b64))
+    elif raw:
         with open(STATE_PATH, "w") as f:
-            f.write(s)
+            f.write(raw)
 
 
 @app.get("/health")
