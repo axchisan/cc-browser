@@ -59,57 +59,37 @@ class GenReq(BaseModel):
 
 
 async def _delete_conversation(page):
-    """Borra la conversación actual de Gemini (best-effort) para no llenar el historial."""
-    # 1) Abrir el menú de "más opciones" de la conversación activa (varios selectores posibles).
-    opened = False
-    for sel in (
-        '[data-test-id="actions-menu-button"]',
-        'button[aria-label*="opcion" i]',
-        'button[aria-label*="más" i]',
-        'button[aria-label*="more" i]',
-        'button[aria-label*="menu" i]',
-    ):
-        try:
-            btn = page.locator(sel).first
-            if await btn.count() > 0:
-                await btn.click(timeout=2500)
-                opened = True
-                break
-        except Exception:
-            continue
-    if not opened:
+    """Borra la conversación recién creada en Gemini (la más reciente) para no llenar
+    el historial. Selectores verificados en la UI de Gemini (2026-06)."""
+    sel = 'gem-nav-list-item[data-test-id="conversation"]'
+    conv = page.locator(sel).first
+    if await conv.count() == 0:
         return
+    # 1) Hover sobre la conversación + abrir su menú "Más opciones".
+    await conv.hover()
     await page.wait_for_timeout(500)
-    # 2) Click en "Eliminar"/"Delete" del menú.
-    for sel in (
-        '[role="menuitem"]:has-text("Eliminar")',
-        '[role="menuitem"]:has-text("Delete")',
-        'button:has-text("Eliminar")',
-        'button:has-text("Delete")',
-    ):
-        try:
-            it = page.locator(sel).first
-            if await it.count() > 0:
-                await it.click(timeout=2500)
-                break
-        except Exception:
-            continue
-    await page.wait_for_timeout(500)
-    # 3) Confirmar en el diálogo.
-    for sel in (
-        '[role="dialog"] button:has-text("Eliminar")',
-        '[role="dialog"] button:has-text("Delete")',
-        'button:has-text("Eliminar")',
-        'button:has-text("Delete")',
-    ):
-        try:
-            c = page.locator(sel).last
-            if await c.count() > 0:
-                await c.click(timeout=2500)
-                break
-        except Exception:
-            continue
+    btn = conv.locator('button[aria-label^="Más opciones"]').first
+    if await btn.count() == 0:
+        btn = conv.locator("button").last
+    await btn.click(timeout=3000)
     await page.wait_for_timeout(600)
+    # 2) Click en "Eliminar".
+    await page.locator('[data-test-id="delete-button"]').first.click(timeout=3000)
+    await page.wait_for_timeout(700)
+    # 3) Confirmar en el diálogo.
+    for s in (
+        '[data-test-id="confirm-button"]',
+        '[role="dialog"] button:has-text("Eliminar")',
+        'button:has-text("Eliminar")',
+    ):
+        try:
+            c = page.locator(s).last
+            if await c.count() > 0:
+                await c.click(timeout=3000)
+                break
+        except Exception:
+            continue
+    await page.wait_for_timeout(800)
 
 
 @app.post("/gen-image")
