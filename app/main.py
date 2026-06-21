@@ -58,6 +58,60 @@ class GenReq(BaseModel):
     timeout_s: int = Field(default=170, description="Máximo a esperar la generación (s).")
 
 
+async def _delete_conversation(page):
+    """Borra la conversación actual de Gemini (best-effort) para no llenar el historial."""
+    # 1) Abrir el menú de "más opciones" de la conversación activa (varios selectores posibles).
+    opened = False
+    for sel in (
+        '[data-test-id="actions-menu-button"]',
+        'button[aria-label*="opcion" i]',
+        'button[aria-label*="más" i]',
+        'button[aria-label*="more" i]',
+        'button[aria-label*="menu" i]',
+    ):
+        try:
+            btn = page.locator(sel).first
+            if await btn.count() > 0:
+                await btn.click(timeout=2500)
+                opened = True
+                break
+        except Exception:
+            continue
+    if not opened:
+        return
+    await page.wait_for_timeout(500)
+    # 2) Click en "Eliminar"/"Delete" del menú.
+    for sel in (
+        '[role="menuitem"]:has-text("Eliminar")',
+        '[role="menuitem"]:has-text("Delete")',
+        'button:has-text("Eliminar")',
+        'button:has-text("Delete")',
+    ):
+        try:
+            it = page.locator(sel).first
+            if await it.count() > 0:
+                await it.click(timeout=2500)
+                break
+        except Exception:
+            continue
+    await page.wait_for_timeout(500)
+    # 3) Confirmar en el diálogo.
+    for sel in (
+        '[role="dialog"] button:has-text("Eliminar")',
+        '[role="dialog"] button:has-text("Delete")',
+        'button:has-text("Eliminar")',
+        'button:has-text("Delete")',
+    ):
+        try:
+            c = page.locator(sel).last
+            if await c.count() > 0:
+                await c.click(timeout=2500)
+                break
+        except Exception:
+            continue
+    await page.wait_for_timeout(600)
+
+
 @app.post("/gen-image")
 async def gen_image(req: GenReq, x_api_key: Optional[str] = Header(default=None)):
     if API_KEY and x_api_key != API_KEY:
@@ -107,6 +161,12 @@ async def gen_image(req: GenReq, x_api_key: Optional[str] = Header(default=None)
 
             await page.wait_for_timeout(1500)
             png = await page.locator("#cc_genimg").screenshot()
+            # La imagen ya está en memoria: borramos la conversación en Gemini para no
+            # llenar el historial del dueño (best-effort, no rompe si la UI cambia).
+            try:
+                await _delete_conversation(page)
+            except Exception:
+                pass
             return Response(content=png, media_type="image/png")
         finally:
             await browser.close()
