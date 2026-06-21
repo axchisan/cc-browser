@@ -19,6 +19,33 @@ from playwright.async_api import async_playwright
 
 API_KEY = os.environ.get("BROWSER_API_KEY", "").strip()
 STATE_PATH = "/tmp/storage_state.json"
+ALERT_URL = os.environ.get("ALERT_URL", "https://n8n.axchisan.com/webhook/cc-alert").strip()
+
+
+async def _alert(title, detail=None, level="error", context=None, source="cc-browser"):
+    """Reporta al webhook central (cc_logs + WhatsApp si error/critical). Best-effort, sin deps."""
+    if not ALERT_URL:
+        return
+    import json as _json
+    import urllib.request
+
+    def _post():
+        try:
+            data = _json.dumps({
+                "source": source, "level": level, "title": title,
+                "detail": detail or {}, "context": context,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                ALERT_URL, data=data, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=15).read()
+        except Exception:
+            pass
+
+    try:
+        import asyncio
+        await asyncio.to_thread(_post)
+    except Exception:
+        pass
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
@@ -121,6 +148,11 @@ async def gen_image(req: GenReq, x_api_key: Optional[str] = Header(default=None)
             # ¿sesión válida? (si pide login, falla claro)
             body = (await page.inner_text("body"))[:400].lower()
             if "iniciar sesión" in body or "sign in to" in body:
+                await _alert(
+                    "🔴 Sesión de Gemini CAÍDA — re-loguear urgente",
+                    level="critical",
+                    detail={"accion": "re-capturar storage_state (cookies_to_state.py) y actualizar STORAGE_STATE_JSON_B64 en Coolify"},
+                    context="cc-browser /gen-image")
                 raise HTTPException(status_code=403, detail="Sesión inválida/expirada en este entorno.")
 
             box = page.locator('div[contenteditable="true"]').first
@@ -137,6 +169,8 @@ async def gen_image(req: GenReq, x_api_key: Optional[str] = Header(default=None)
                     found = True
                     break
             if not found:
+                await _alert("Gemini no generó imagen a tiempo (timeout)", level="error",
+                             detail={"timeout_s": req.timeout_s}, context="cc-browser /gen-image")
                 raise HTTPException(status_code=504, detail="Gemini no generó imagen a tiempo.")
 
             await page.wait_for_timeout(1500)
