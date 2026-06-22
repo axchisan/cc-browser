@@ -20,6 +20,38 @@ from playwright.async_api import async_playwright
 API_KEY = os.environ.get("BROWSER_API_KEY", "").strip()
 STATE_PATH = "/tmp/storage_state.json"
 ALERT_URL = os.environ.get("ALERT_URL", "https://n8n.axchisan.com/webhook/cc-alert").strip()
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://db.quanta.axchisan.com").strip().rstrip("/")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
+
+
+async def _load_session_from_db():
+    """Carga el storage_state más reciente desde cc_config (clave 'gemini_session') a STATE_PATH.
+    La extensión del navegador mantiene esa fila fresca → la sesión ya no depende del env var.
+    Devuelve True si cargó una sesión de la DB."""
+    if not SUPABASE_KEY:
+        return False
+    import json as _json
+    import urllib.request
+
+    def _get():
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/cc_config?clave=eq.gemini_session&select=valor"
+            req = urllib.request.Request(
+                url, headers={"apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY})
+            rows = _json.loads(urllib.request.urlopen(req, timeout=15).read())
+            if rows and rows[0].get("valor") and rows[0]["valor"].get("cookies"):
+                with open(STATE_PATH, "w") as f:
+                    _json.dump(rows[0]["valor"], f)
+                return True
+        except Exception:
+            pass
+        return False
+
+    try:
+        import asyncio
+        return await asyncio.to_thread(_get)
+    except Exception:
+        return False
 
 
 async def _alert(title, detail=None, level="error", context=None, source="cc-browser"):
@@ -123,8 +155,10 @@ async def _delete_conversation(page):
 async def gen_image(req: GenReq, x_api_key: Optional[str] = Header(default=None)):
     if API_KEY and x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="API key inválido o ausente.")
+    # Refresca la sesión desde la DB (cc_config 'gemini_session'); la extensión la mantiene viva.
+    await _load_session_from_db()
     if not os.path.exists(STATE_PATH):
-        raise HTTPException(status_code=503, detail="Sin sesión cargada (STORAGE_STATE_JSON).")
+        raise HTTPException(status_code=503, detail="Sin sesión cargada (ni DB ni env).")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
