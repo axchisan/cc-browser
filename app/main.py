@@ -203,9 +203,15 @@ async def gen_image(req: GenReq, x_api_key: Optional[str] = Header(default=None)
                     found = True
                     break
             if not found:
-                await _alert("Gemini no generó imagen a tiempo (timeout)", level="error",
-                             detail={"timeout_s": req.timeout_s}, context="cc-browser /gen-image")
-                raise HTTPException(status_code=504, detail="Gemini no generó imagen a tiempo.")
+                dbg = ""
+                try:
+                    dbg = (await page.inner_text("body"))[-1200:]
+                except Exception:
+                    pass
+                await _alert("Gemini no generó imagen (timeout) — diagnóstico", level="error",
+                             detail={"timeout_s": req.timeout_s, "pagina_texto": dbg[-700:]},
+                             context="cc-browser /gen-image")
+                raise HTTPException(status_code=504, detail="Gemini no generó imagen. PÁGINA DICE >>> " + dbg[-700:])
 
             await page.wait_for_timeout(1500)
             png = await page.locator("#cc_genimg").screenshot()
