@@ -81,14 +81,44 @@ async def _alert(title, detail=None, level="error", context=None, source="cc-bro
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
-# Marca el <img> generado por Gemini (grande, no avatar) con un id para capturarlo.
+# Marca el <img> generado por Gemini con id para capturarlo. Robustez vs Gemini 3.x:
+# (1) PERFORA shadow DOM (la UI usa web components); (2) reconoce la imagen por alt
+# "generada por IA"/blob: ademas de por tamaño; (3) descarta avatares (/a/).
 TAG_JS = """() => {
-  const imgs = [...document.querySelectorAll('img')];
-  const big = imgs.filter(i => i.naturalWidth >= 380 && i.naturalHeight >= 380
-                               && !((i.src || '').includes('/a/')));
-  big.sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight));
-  if (big.length) { big[0].id = 'cc_genimg'; big[0].scrollIntoView(); return true; }
+  const found = [];
+  function walk(root){
+    let els; try { els = root.querySelectorAll('*'); } catch(e){ return; }
+    for (const el of els){
+      if (el.tagName === 'IMG'){
+        const src = el.src || '';
+        const aiAlt = /generad|generated/i.test(el.alt || '');
+        const isBlob = src.startsWith('blob:') || src.startsWith('data:');
+        const big = el.naturalWidth >= 380 && el.naturalHeight >= 380;
+        if ((big || aiAlt || isBlob) && el.naturalWidth >= 300 && el.naturalHeight >= 300
+            && !src.includes('/a/')) found.push(el);
+      }
+      if (el.shadowRoot) walk(el.shadowRoot);
+    }
+  }
+  walk(document);
+  found.sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight));
+  if (found.length){ found[0].id = 'cc_genimg'; found[0].scrollIntoView(); return true; }
   return false;
+}"""
+
+# Diagnóstico: cuenta TODAS las imágenes (perforando shadow DOM) para saber, en un
+# timeout, si la imagen estaba pero no se detectó vs no se generó.
+COUNT_JS = """() => {
+  let n = 0, big = 0;
+  function walk(root){
+    let els; try { els = root.querySelectorAll('*'); } catch(e){ return; }
+    for (const el of els){
+      if (el.tagName === 'IMG'){ n++; if (el.naturalWidth >= 300 && el.naturalHeight >= 300) big++; }
+      if (el.shadowRoot) walk(el.shadowRoot);
+    }
+  }
+  walk(document);
+  return { total: n, grandes: big };
 }"""
 
 app = FastAPI(title="cc-browser", version="0.1.0")
@@ -204,12 +234,14 @@ async def gen_image(req: GenReq, x_api_key: Optional[str] = Header(default=None)
                     break
             if not found:
                 dbg = ""
+                cnt = {}
                 try:
                     dbg = (await page.inner_text("body"))[-1200:]
+                    cnt = await page.evaluate(COUNT_JS)
                 except Exception:
                     pass
                 await _alert("Gemini no generó imagen (timeout) — diagnóstico", level="error",
-                             detail={"timeout_s": req.timeout_s, "pagina_texto": dbg[-700:]},
+                             detail={"timeout_s": req.timeout_s, "imgs": cnt, "pagina_texto": dbg[-600:]},
                              context="cc-browser /gen-image")
                 raise HTTPException(status_code=504, detail="Gemini no generó imagen. PÁGINA DICE >>> " + dbg[-700:])
 
